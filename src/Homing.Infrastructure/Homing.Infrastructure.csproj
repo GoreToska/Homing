@@ -4,4 +4,8 @@
       <ProjectReference Include="..\Homing.Core\Homing.Core.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <PackageReference Include="MailKit" />
+    </ItemGroup>
+
 </Project>
