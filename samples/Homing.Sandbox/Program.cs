@@ -1,31 +1,28 @@
-﻿using Homing.Infrastructure.Imap;
+﻿using Homing.Core.Messages;
+using Homing.Infrastructure.Imap;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Security;
 using Microsoft.Extensions.Configuration;
 
-var test = new ConfigurationBuilder().AddUserSecrets<Program>().Build();
+var secrets = new ConfigurationBuilder().AddUserSecrets<Program>().Build();
 var mailAcc = MailAccountSettings.ForMailRu(
-    test["Mail:Username"] ?? throw new InvalidOperationException(),
-    test["Mail:Password"] ?? throw new InvalidOperationException());
-Console.WriteLine(mailAcc);
+    secrets["Mail:Username"] ?? throw new InvalidOperationException(),
+    secrets["Mail:Password"] ?? throw new InvalidOperationException());
 
-using var client = new ImapClient();
+var reader = new ImapMailboxReader(mailAcc);
 
-await client.ConnectAsync(mailAcc.Host, mailAcc.Port, SecureSocketOptions.SslOnConnect);
+Console.WriteLine($"First page");
 
-await client.AuthenticateAsync(mailAcc.Username, mailAcc.Password);
-
-var listOfFolders = await client.GetFoldersAsync(client.PersonalNamespaces[0]);
-
-foreach (var folder in listOfFolders)
+var firstPage = await reader.GetMessagesAsync("INBOX", null, 10);
+foreach (var m in firstPage)
 {
-    Console.WriteLine(folder.FullName);
+    Console.WriteLine($"{m.Id.Uid} {m.ReceivedAt} {m.From?.Address} {m.Subject} {m.IsRead} {m.HasAttachments}");
 }
 
-var folderAccess = await client.Inbox.OpenAsync(FolderAccess.ReadOnly);
+Console.WriteLine($"Second page");
 
-Console.WriteLine($"Messages {client.Inbox.Count}");
-Console.WriteLine($"UIDVALIDITY {client.Inbox.UidValidity}");
-
-await client.DisconnectAsync(true);
+foreach (var m in await reader.GetMessagesAsync("INBOX", firstPage.ToList().Last().Id, 10))
+{
+    Console.WriteLine($"{m.Id.Uid} {m.ReceivedAt} {m.From?.Address} {m.Subject} {m.IsRead} {m.HasAttachments}");
+}
