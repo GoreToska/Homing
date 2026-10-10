@@ -50,4 +50,50 @@ internal static class ImapMapper
             Tags = summary.Keywords.ToList()
         };
     }
+
+    public static MessageDetails ToMessageDetails(IMessageSummary imapSummary, MessageSummary domainSummary,
+        string? textBody, string? htmlBody)
+    {
+        var envelope = imapSummary.Envelope ?? throw new InvalidOperationException("Envelope was not fetched.");
+        var refs = imapSummary.References?.ToList() ??
+                   throw new InvalidOperationException("References was not fetched.");
+        var to = ToEmailAddresses(envelope.To);
+        var cc = ToEmailAddresses(envelope.Cc);
+        var bcc = ToEmailAddresses(envelope.Bcc);
+        var attachments = ToAttachmentInfos(imapSummary.Attachments);
+        var replyTo = ToEmailAddresses(envelope.ReplyTo);
+
+        return new MessageDetails
+        {
+            Summary = domainSummary,
+            HtmlBody = htmlBody,
+            TextBody = textBody,
+            To = to,
+            Cc = cc,
+            Bcc = bcc,
+            Attachments = attachments,
+            InReplyTo = envelope.InReplyTo,
+            SentAt = envelope.Date,
+            MessageIdHeader = envelope.MessageId,
+            ReplyTo = replyTo,
+            References = refs,
+        };
+    }
+
+    private static List<EmailAddress> ToEmailAddresses(InternetAddressList list)
+    {
+        return (from MailboxAddress? address in list.Mailboxes select ToEmailAddress(address)).ToList();
+    }
+
+    private static List<AttachmentInfo> ToAttachmentInfos(IEnumerable<BodyPartBasic> infos)
+    {
+        return (from BodyPartBasic? body in infos
+                select ToAttachmentInfo(body))
+            .ToList();
+    }
+
+    private static AttachmentInfo ToAttachmentInfo(BodyPartBasic part)
+    {
+        return new AttachmentInfo(part.PartSpecifier, part.Octets, part.ContentType.MimeType, part.FileName);
+    }
 }

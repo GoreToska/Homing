@@ -6,6 +6,7 @@ using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Search;
 using MailKit.Security;
+using MimeKit;
 using MessageSummary = Homing.Core.Messages.MessageSummary;
 
 namespace Homing.Infrastructure.Imap;
@@ -13,6 +14,10 @@ namespace Homing.Infrastructure.Imap;
 public sealed class ImapMailboxReader : IMailboxReader
 {
     private readonly MailAccountSettings _settings;
+
+    private const MessageSummaryItems SummaryItems =
+        MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Flags |
+        MessageSummaryItems.InternalDate | MessageSummaryItems.BodyStructure;
 
     public ImapMailboxReader(MailAccountSettings settings)
     {
@@ -30,11 +35,7 @@ public sealed class ImapMailboxReader : IMailboxReader
         try
         {
             using var client = await ConnectClientAsync(cancellationToken);
-            var foundFolder = await client.GetFolderAsync(folder, cancellationToken);
-            await foundFolder.OpenAsync(FolderAccess.ReadOnly, cancellationToken);
-
-            if (olderThan is not null && foundFolder.UidValidity != olderThan.Value.UidValidity)
-                throw new UidValidityChangedException(folder, olderThan.Value.UidValidity, foundFolder.UidValidity);
+            var foundFolder = await OpenFolderAsync(client, folder, olderThan?.UidValidity, cancellationToken);
 
             if (olderThan is not null && olderThan.Value.Uid <= 1) return [];
 
@@ -48,23 +49,48 @@ public sealed class ImapMailboxReader : IMailboxReader
 
             if (pageUids.Count == 0) return [];
 
-            var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.Flags |
-                        MessageSummaryItems.InternalDate | MessageSummaryItems.BodyStructure;
-
-            var fetched = await foundFolder.FetchAsync(pageUids, items, cancellationToken);
+            var fetched = await foundFolder.FetchAsync(pageUids, SummaryItems, cancellationToken);
             return fetched.Select(s =>
                     ImapMapper.ToMessageSummary(s, _settings.Username, foundFolder.FullName, foundFolder.UidValidity))
                 .OrderByDescending(s => s.Id.Uid).ToList();
         }
         catch (Exception e) when (IsMailError(e))
         {
-            throw new MailboxException($"Failed to get messages from folder '{folder}'", e);
+            throw new MailboxException($"Failed to get messages from folder '{folder}'.", e);
         }
     }
 
-    public Task<MessageDetails?> GetMessageAsync(MessageId messageId, CancellationToken cancellationToken = default)
+    public async Task<MessageDetails?> GetMessageAsync(MessageId messageId,
+        CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException();
+        if (messageId.Account != _settings.Username)
+            throw new ArgumentException("Message belongs to a different account.", nameof(messageId));
+
+        try
+        {
+            using var client = await ConnectClientAsync(cancellationToken);
+            var foundFolder = await OpenFolderAsync(client, messageId.Folder, messageId.UidValidity, cancellationToken);
+
+            var messageSummaries = await foundFolder.FetchAsync([new UniqueId(messageId.Uid)],
+                SummaryItems | MessageSummaryItems.References, cancellationToken);
+
+            var summary = messageSummaries.FirstOrDefault();
+
+            if (summary is null)
+                return null;
+
+            var textBody = await DownloadTextAsync(foundFolder, summary.UniqueId, summary.TextBody, cancellationToken);
+            var htmlBody = await DownloadTextAsync(foundFolder, summary.UniqueId, summary.HtmlBody, cancellationToken);
+
+            var messageSummary = ImapMapper.ToMessageSummary(summary, _settings.Username, foundFolder.FullName,
+                foundFolder.UidValidity);
+
+            return ImapMapper.ToMessageDetails(summary, messageSummary, textBody, htmlBody);
+        }
+        catch (Exception e) when (IsMailError(e))
+        {
+            throw new MailboxException($"Failed to get message {messageId.Uid} from folder '{messageId.Folder}'.", e);
+        }
     }
 
     private async Task<ImapClient> ConnectClientAsync(CancellationToken cancellationToken)
@@ -87,9 +113,34 @@ public sealed class ImapMailboxReader : IMailboxReader
         }
     }
 
+    private static async Task<IMailFolder> OpenFolderAsync(ImapClient client, string folder, uint? expectedValidity,
+        CancellationToken cancellationToken)
+    {
+        var foundFolder = await client.GetFolderAsync(folder, cancellationToken);
+        await foundFolder.OpenAsync(FolderAccess.ReadOnly, cancellationToken);
+
+        if (expectedValidity is not null && foundFolder.UidValidity != expectedValidity)
+            throw new UidValidityChangedException(folder, expectedValidity.Value, foundFolder.UidValidity);
+
+        return foundFolder;
+    }
+
+    private static async Task<string?> DownloadTextAsync(IMailFolder folder, UniqueId uid, BodyPartText? part,
+        CancellationToken cancellationToken)
+    {
+        if (part is null) return null;
+
+        var body = await folder.GetBodyPartAsync(uid, part, cancellationToken);
+
+        if (body is TextPart textPart)
+            return textPart.Text;
+
+        return null;
+    }
+
     private static bool IsMailError(Exception e)
     {
         return e is CommandException or ProtocolException or FolderNotFoundException or AuthenticationException
-            or SslHandshakeException or IOException or SocketException;
+            or SslHandshakeException or IOException or SocketException or ParseException;
     }
 }

@@ -26,3 +26,17 @@ foreach (var m in await reader.GetMessagesAsync("INBOX", firstPage.ToList().Last
 {
     Console.WriteLine($"{m.Id.Uid} {m.ReceivedAt} {m.From?.Address} {m.Subject} {m.IsRead} {m.HasAttachments}");
 }
+
+var Id = firstPage[1].Id;
+
+var details = await reader.GetMessageAsync(Id);
+if(details is null) Console.WriteLine("Message is null");
+else
+{
+    Console.WriteLine(details.Summary);
+    Console.WriteLine(details.TextBody);
+    Console.WriteLine(details.HtmlBody);
+    Console.WriteLine(details.To);
+    Console.WriteLine(details.Cc);
+    Console.WriteLine(details.Attachments);
+}
