@@ -1,0 +1,9 @@
+<Project>
+  <!-- Inherit the root Directory.Build.props: MSBuild only picks up the nearest one. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- CA1707: test names use underscores (Method_Scenario_Expected). -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+</Project>

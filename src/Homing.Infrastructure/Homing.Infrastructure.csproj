@@ -8,4 +8,8 @@
       <PackageReference Include="MailKit" />
     </ItemGroup>
 
+    <ItemGroup>
+      <InternalsVisibleTo Include="Homing.Infrastructure.Tests" />
+    </ItemGroup>
+
 </Project>
