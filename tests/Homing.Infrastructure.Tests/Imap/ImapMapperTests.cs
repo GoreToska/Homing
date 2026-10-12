@@ -1,10 +1,11 @@
-using Homing.Core.Messages;
+﻿using Homing.Core.Messages;
 using Homing.Infrastructure.Imap;
 using MailKit;
 using MimeKit;
 using ImapFlags = MailKit.MessageFlags;
 using MessageFlags = Homing.Core.Messages.MessageFlags;
 using ImapSummary = MailKit.MessageSummary;
+using MessageSummary = Homing.Core.Messages.MessageSummary;
 
 namespace Homing.Infrastructure.Tests.Imap;
 
@@ -15,6 +16,7 @@ public class ImapMapperTests
     private const uint UidValidity = 1370234464;
     private const uint Uid = 42;
     private static readonly DateTimeOffset ReceivedAt = new(2026, 10, 1, 9, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset SentAt = new(2026, 10, 1, 8, 0, 0, TimeSpan.Zero);
 
     [Theory]
     [InlineData(ImapFlags.None, MessageFlags.None)]
@@ -85,10 +87,10 @@ public class ImapMapperTests
         Assert.Equal(ReceivedAt, result.ReceivedAt);
         Assert.Equal(MessageFlags.Seen, result.Flags);
         Assert.True(result.IsRead);
-        Assert.Equal(new EmailAddress("some_mail@mail.ru", "SomeName"), result.From);
+        Assert.Equal(new EmailAddress("some_from_mail@mail.ru", "SomeFromName"), result.From);
         Assert.Equal("Hello", result.Subject);
         Assert.Equal(["work"], result.Tags);
-        Assert.False(result.HasAttachments);
+        Assert.True(result.HasAttachments);
     }
 
     [Fact]
@@ -107,15 +109,76 @@ public class ImapMapperTests
     {
         var imap = CreateValidImapSummary();
         imap.Envelope = null;
-        
+
         Assert.Throws<InvalidOperationException>(() => ImapMapper.ToMessageSummary(imap, Account, Folder, UidValidity));
     }
+
+    [Fact]
+    public void ToMessageDetailsMapsAllFields()
+    {
+        var imap = CreateValidImapSummary();
+        var summary = CreateDomainSummary();
+
+        var result = ImapMapper.ToMessageDetails(imap, summary, "plain text", "<p>html text</p>");
+
+        Assert.Same(summary, result.Summary);
+        Assert.Equal([new EmailAddress("some_to_mail@mail.ru", "SomeToName")], result.To);
+        Assert.Equal([new EmailAddress("some_cc_mail@mail.ru", "SomeCcName")], result.Cc);
+        Assert.Equal([new EmailAddress("some_reply_to_mail@mail.ru", "SomeReplyToName")], result.ReplyTo);
+        Assert.Equal(SentAt, result.SentAt);
+        Assert.Equal("msg-1@mail.ru", result.MessageIdHeader);
+        Assert.Equal("parent@mail.ru", result.InReplyTo);
+        Assert.Equal(["root@mail.ru", "parent@mail.ru"], result.References);
+        Assert.Equal("plain text", result.TextBody);
+        Assert.Equal("<p>html text</p>", result.HtmlBody);
+        Assert.Equal([new AttachmentInfo("2", 1024, "application/pdf", "file.pdf")], result.Attachments);
+        Assert.Empty(result.Bcc);
+    }
+
+    [Fact]
+    public void ToMessageDetailsReferencesNotFetchedThrows()
+    {
+        var imap = CreateValidImapSummary();
+        imap.References = null;
+        var summary = CreateDomainSummary();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            ImapMapper.ToMessageDetails(imap, summary, "plain text", "<p>html text</p>"));
+    }
+
+    [Fact]
+    public void ToMessageDetailsEmptyGroupInToIsSkipped()
+    {
+        var imap = CreateValidImapSummary();
+        imap.Envelope!.To.Add(new GroupAddress("undisclosed-recipients"));
+        var summary = CreateDomainSummary();
+
+        var result = ImapMapper.ToMessageDetails(imap, summary, "plain text", "<p>html text</p>");
+
+        Assert.Equal([new EmailAddress("some_to_mail@mail.ru", "SomeToName")], result.To);
+    }
+
+    private static MessageSummary CreateDomainSummary() =>
+        new() { Id = new MessageId(Account, Folder, UidValidity, Uid), ReceivedAt = ReceivedAt };
 
     private static ImapSummary CreateValidImapSummary()
     {
         var envelope = new Envelope { Subject = "Hello" };
-        envelope.From.Add(new MailboxAddress("SomeName", "some_mail@mail.ru"));
-        var body = new BodyPartText(new ContentType("text", "plain"), "1");
+        envelope.From.Add(new MailboxAddress("SomeFromName", "some_from_mail@mail.ru"));
+        envelope.Cc.Add(new MailboxAddress("SomeCcName", "some_cc_mail@mail.ru"));
+        envelope.To.Add(new MailboxAddress("SomeToName", "some_to_mail@mail.ru"));
+        envelope.ReplyTo.Add(new MailboxAddress("SomeReplyToName", "some_reply_to_mail@mail.ru"));
+        envelope.Date = SentAt;
+        envelope.MessageId = "msg-1@mail.ru";
+        envelope.InReplyTo = "parent@mail.ru";
+
+        var body = new BodyPartMultipart(new ContentType("multipart", "mixed"), "");
+        body.BodyParts.Add(new BodyPartText(new ContentType("text", "plain"), "1"));
+        body.BodyParts.Add(new BodyPartBasic(new ContentType("application", "pdf"), "2")
+        {
+            Octets = 1024,
+            ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "file.pdf" },
+        });
 
         return new ImapSummary(0)
         {
@@ -125,6 +188,7 @@ public class ImapMapperTests
             Envelope = envelope,
             Body = body,
             Keywords = new HashSet<string> { "work" },
+            References = new MessageIdList { "root@mail.ru", "parent@mail.ru" },
         };
     }
 }
